@@ -1,0 +1,100 @@
+#include "mbed.h"
+#include "EthernetInterface.h"
+#include "ThisThread.h"
+#include "utility.h"
+
+// Parameters
+#define DHCP false
+#define IP "10.0.12.213"
+#define GATEWAY "10.0.12.2"
+#define MASK "255.255.255.0"
+#define TOIP "10.0.12.200"
+#define UDPPORT 5000
+#define MAINTHREADWAIT 10
+#define MSG_UDP_ON_1 "p1;7" 
+#define MSG_UDP_ON_2 "p1;8"  
+
+EthernetInterface eth;
+UDPSocket sock;
+SocketAddress from_addr;
+SocketAddress auxip;
+SocketAddress auxgwt;
+
+DigitalIn btnIn1(D2); // btnIn1
+DigitalIn btnIn2(D4); // btnIn2
+int stateBtnIn1 = 0;
+int stateBtnIn2 = 0;
+
+/*******************
+ *       MAIN      *
+ *******************/
+
+int main(void) {
+    debug("#START\r\n");
+
+    // Mode PullUP for NUCLEOF767ZI board
+    btnIn1.mode(PullUp);
+    btnIn2.mode(PullUp);
+    
+    int stato = 0;
+    int eth_status = 0;
+    eth.disconnect();
+
+    if (DHCP) {
+        eth_status = eth.connect(); // connetto in DHCP
+        eth.get_ip_address(&auxip);
+        const char *ip = auxip.get_ip_address();
+        eth.get_gateway(&auxgwt);
+        const char *gtw = auxgwt.get_ip_address();
+        debug("Ip (DHCP): %s - %s\r\n", ip, gtw);
+    } else {
+        eth.set_network(IP, MASK, GATEWAY);
+        eth_status = eth.connect(); // connetto in Static IP
+        eth.get_ip_address(&auxip);
+        const char *ip1 = auxip.get_ip_address();
+        eth.get_gateway(&auxgwt);
+        const char *gtw1 = auxgwt.get_ip_address();
+        debug("Ip (Static): %s - %s\r\n", ip1, gtw1);
+    }
+
+    // apro socket
+    SocketAddress addr(TOIP, UDPPORT);
+    debug("Socket Open!\r\n");
+    sock.open(&eth);
+    sock.connect(addr);
+    debug("Socket connesso alla porta %d (trasmissione) send to: %s\r\n", UDPPORT, TOIP);
+
+    allLedOff();
+    debug("#READY\n");
+
+    while (1) {
+        allLedOff();
+        eth_status = eth.connect(); // leggo lo stato della connessione eth
+
+        if (eth_status == NSAPI_ERROR_IS_CONNECTED) {
+            // Button 1
+            if(btnIn1 == 0 && stateBtnIn1 != btnIn1) {
+                stateBtnIn1 = btnIn1;
+                allLedOn();
+                debug("%s\r\n", MSG_UDP_ON_1);
+                sock.send(MSG_UDP_ON_1, sizeof(MSG_UDP_ON_1)-1); //cosi' elimino /0 in fondo alla stringa
+            } else if (btnIn1 == 1 && stateBtnIn1 != btnIn1) {
+                stateBtnIn1 = btnIn1;
+            }
+
+            // Button 2
+            if(btnIn2 == 0 && stateBtnIn2 != btnIn2) {
+                stateBtnIn2 = btnIn2;
+                allLedOn();
+                debug("%s\r\n", MSG_UDP_ON_2);
+                sock.send(MSG_UDP_ON_2, sizeof(MSG_UDP_ON_2)-1); //cosi' elimino /0 in fondo alla stringa
+            } else if (btnIn2 == 1 && stateBtnIn2 != btnIn2) {
+                stateBtnIn2 = btnIn2;
+            }
+
+        }
+
+        ThisThread::sleep_for(MAINTHREADWAIT);
+    }
+}
+

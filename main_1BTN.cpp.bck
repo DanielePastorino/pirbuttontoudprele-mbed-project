@@ -1,0 +1,167 @@
+#include "mbed.h"
+#include "EthernetInterface.h"
+#include "ThisThread.h"
+#include "utility.h"
+
+/************************************
+       COGNE GROTTA CANDELOTTI
+************************************/
+
+// Parameters
+//#define _RELE     //decommentare per attivare rele
+#define DHCP false
+#define IP "10.0.12.210"
+#define GATEWAY "10.0.12.2"
+#define MASK "255.255.255.0"
+#define TOIP "10.0.11.84"
+#define UDPPORT 5000
+#define UDPPORTRECEIVER 12003
+#define MAINTHREADWAIT 10
+#define MSG_UDP_BTN_ON "tnt;1" 
+#define MSG_UDP_BTN_OFF "tnt;0" 
+
+EthernetInterface eth;
+UDPSocket sock;
+SocketAddress from_addr;
+SocketAddress auxip;
+SocketAddress auxgwt;
+
+#ifdef _RELE
+UDPSocket sockReceiverRele;
+Thread threadUDPreceive;
+DigitalOut rele[] = {D2, D3, D4, D5, D6, D7};
+const int numRele = sizeof(rele) / sizeof(DigitalOut);
+char buffer[256] = {'\0'}; // così diventa una stringa xche finisce con \0
+#endif
+
+DigitalIn btnIn(D8); // BUTTON
+int stateBtnIn = 0;
+
+#ifdef _RELE
+/*
+ * Il Tread di ricezione UDP del tipo 0010, 1011, ecc...
+ */
+void receiveUdpThread() {
+  while (true) {
+    int n = sockReceiverRele.recv(&buffer, sizeof(buffer));
+
+    if (n > 0) {
+      buffer[n] = '\0';
+      debug(">Received: %s\n\r", buffer);
+
+      bool shouldWait = false;
+
+      for (int i = 0; i < strlen(buffer); i++) {
+        int val = charToInt(buffer[i]);
+        if (i < numRele) {
+          debug("Set rele %d to %d\r\n", i, val);
+          rele[i] = val;
+
+          if (val == 1)
+            shouldWait = true;
+
+        }
+      }
+
+      if (shouldWait) {
+          ThisThread::sleep_for(1500ms);
+          for (int i=0; i<numRele; i++){
+              rele[i] = 0;
+          }
+      }
+
+    }
+  }
+}
+#endif
+
+/*******************
+ *       MAIN      *
+ *******************/
+
+int main(void) {
+    debug("#START\r\n");
+
+    #ifdef _RELE 
+    /* init rele */
+    for(int i=0; i<numRele; i++)
+    {
+        rele[i] = 0;
+    }
+    #endif
+
+    int stato = 0;
+    int eth_status = 0;
+    eth.disconnect();
+
+    if (DHCP) {
+        eth_status = eth.connect(); // connetto in DHCP
+        eth.get_ip_address(&auxip);
+        const char *ip = auxip.get_ip_address();
+        eth.get_gateway(&auxgwt);
+        const char *gtw = auxgwt.get_ip_address();
+        debug("Ip (DHCP): %s - %s\r\n", ip, gtw);
+    } else {
+        eth.set_network(IP, MASK, GATEWAY);
+        eth_status = eth.connect(); // connetto in Static IP
+        eth.get_ip_address(&auxip);
+        const char *ip1 = auxip.get_ip_address();
+        eth.get_gateway(&auxgwt);
+        const char *gtw1 = auxgwt.get_ip_address();
+        debug("Ip (Static): %s - %s\r\n", ip1, gtw1);
+    }
+
+    // apro socket
+    SocketAddress addr(TOIP, UDPPORT);
+    debug("Socket Open!\r\n");
+    sock.open(&eth);
+    sock.connect(addr);
+    debug("Socket connesso alla porta %d (trasmissione) send to: %s\r\n", UDPPORT, TOIP);
+
+    #ifdef _RELE
+    // socket ricezione per RELE
+    sockReceiverRele.open(&eth);
+    sockReceiverRele.bind(UDPPORTRECEIVER);
+    debug("[RECV-RELE] Socket Open! Port: %d (ricezione)\r\n", UDPPORTRECEIVER);
+    threadUDPreceive.start(receiveUdpThread);
+    #endif
+
+    allLedOff();
+    debug("#Ready\n");
+
+    while (1) {
+        eth_status = eth.connect(); // leggo lo stato della connessione eth
+
+        /********************************
+        * Send single state of buttton
+        *********************************/
+        /*
+        if (eth_status == NSAPI_ERROR_IS_CONNECTED) {
+            if(btnIn == 0 && stateBtnIn != btnIn) {
+                stateBtnIn = btnIn;
+                allLedOn();
+                debug("%s\r\n", MSG_UDP_BTN_ON);
+                sock.send(MSG_UDP_BTN_ON, sizeof(MSG_UDP_BTN_ON)-1); //cosi' elimino /0 in fondo alla stringa
+            } else if (btnIn == 1 && stateBtnIn != btnIn) {
+                stateBtnIn = btnIn;
+                //allLedOn();
+                //debug("%s\r\n", MSG_UDP_BTN_OFF);
+                //sock.send(MSG_UDP_BTN_OFF, sizeof(MSG_UDP_BTN_OFF)-1); //cosi' elimino /0 in fondo alla stringa
+            }
+        }
+        */
+
+        if (eth_status == NSAPI_ERROR_IS_CONNECTED) {
+            if(btnIn == 0) {
+                debug("%s\r\n", MSG_UDP_BTN_ON);
+                sock.send(MSG_UDP_BTN_ON, sizeof(MSG_UDP_BTN_ON)-1); //cosi' elimino /0 in fondo alla stringa
+            } else if (btnIn == 1) {
+                debug("%s\r\n", MSG_UDP_BTN_OFF);
+                sock.send(MSG_UDP_BTN_OFF, sizeof(MSG_UDP_BTN_OFF)-1); //cosi' elimino /0 in fondo alla stringa
+            }
+        }
+
+        ThisThread::sleep_for(MAINTHREADWAIT);
+    }
+}
+
